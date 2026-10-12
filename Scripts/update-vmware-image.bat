@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 
 title JollyOS - Update VMware Image
 
@@ -14,13 +14,20 @@ set "VHD_PATH=%BUILD_DIR%\JollyOS.vhd"
 set "VMDK_PATH=%BUILD_DIR%\JollyOS.vmdk"
 set "TEMP_VMDK=%BUILD_DIR%\JollyOS.new.vmdk"
 set "BACKUP_VMDK=%BUILD_DIR%\JollyOS.previous.vmdk"
-set "DISKPART_SCRIPT=%TEMP%\JollyOS-diskpart-%RANDOM%.txt"
-set "DRIVE=M:"
-set "DISK_ATTACHED=0"
-
 set "BOOTLOADER=%BUILD_DIR%\EFI\BOOT\BOOTX64.EFI"
 set "KERNEL=%BUILD_DIR%\kernel.exe"
 set "VMWARE_DISK_MANAGER=C:\Program Files\VMware\VMware Workstation\vmware-vdiskmanager.exe"
+
+set "DRIVE=P:"
+set "DISKPART_SCRIPT=%TEMP%\JollyOS-diskpart-%RANDOM%.txt"
+set "DISKPART_OUTPUT=%TEMP%\JollyOS-diskpart-output-%RANDOM%.txt"
+
+set "DISK_ATTACHED=0"
+set "PARTITION_MODIFIED=0"
+
+set "EFI_TYPE=C12A7328-F81F-11D2-BA4B-00A0C93EC93B"
+set "BASIC_DATA_TYPE=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7"
+set "EFI_ATTRIBUTES=0x8000000000000000"
 
 echo Checking prerequisites...
 
@@ -57,6 +64,13 @@ if exist "%TEMP_VMDK%" (
     goto :fail
 )
 
+if exist "%BACKUP_VMDK%" (
+    echo ERROR: Backup file already exists:
+    echo %BACKUP_VMDK%
+    echo Check it before proceeding.
+    goto :fail
+)
+
 echo.
 echo Checking VMware is shut down...
 
@@ -69,60 +83,93 @@ if not errorlevel 1 (
 )
 
 echo.
-echo Checking drive letter %DRIVE% is available...
+echo Checking temporary drive letter %DRIVE%...
 
-if exist "%DRIVE%\" (
-    echo ERROR: Drive %DRIVE% is already in use.
-    echo Free this drive letter or change DRIVE in this script.
+mountvol %DRIVE% /L >nul 2>&1
+
+if not errorlevel 1 (
+    echo ERROR: Drive letter %DRIVE% is already mounted.
+    echo Choose another unused drive letter before proceeding.
     goto :fail
 )
 
 echo.
-echo [1/4] Attaching source VHD...
+echo [1/4] Attaching the source VHD...
 
 (
     echo select vdisk file="%VHD_PATH%"
     echo attach vdisk
-    echo select partition 1
-    echo assign letter=M
     echo exit
 ) > "%DISKPART_SCRIPT%"
 
-diskpart /s "%DISKPART_SCRIPT%"
+diskpart /s "%DISKPART_SCRIPT%" > "%DISKPART_OUTPUT%" 2>&1
+type "%DISKPART_OUTPUT%"
+
+findstr /I /C:"DiskPart successfully attached the virtual disk file." "%DISKPART_OUTPUT%" >nul
 
 if errorlevel 1 (
-    echo ERROR: DiskPart reported a problem attaching the VHD.
-    goto :fail
-)
-
-del "%DISKPART_SCRIPT%" >nul 2>&1
-set "DISKPART_SCRIPT="
-
-if not exist "M:\EFI\BOOT\." (
-    echo ERROR: EFI boot folder was not found on J:.
-    set "DISK_ATTACHED=1"
-    goto :fail
-)
-
-if not exist "M:\kernel.exe" (
-    echo ERROR: kernel.exe was not found on the mounted VHD.
-    set "DISK_ATTACHED=1"
+    echo ERROR: DiskPart did not confirm that the VHD was attached.
     goto :fail
 )
 
 set "DISK_ATTACHED=1"
 
 echo.
+echo Temporarily changing the VHD EFI partition type...
+
+rem This modifies partition 1 on the selected VHD only.
+rem The original EFI type and attributes are restored before detaching.
+
+set "PARTITION_MODIFIED=1"
+
+(
+    echo select vdisk file="%VHD_PATH%"
+    echo select partition 1
+    echo set id=%BASIC_DATA_TYPE% override
+    echo gpt attributes=0x0000000000000000
+    echo assign letter=%DRIVE:~0,1%
+    echo exit
+) > "%DISKPART_SCRIPT%"
+
+diskpart /s "%DISKPART_SCRIPT%" > "%DISKPART_OUTPUT%" 2>&1
+type "%DISKPART_OUTPUT%"
+
+findstr /I /C:"DiskPart successfully assigned the drive letter or mount point." "%DISKPART_OUTPUT%" >nul
+
+if errorlevel 1 (
+    echo ERROR: Could not assign the temporary drive letter.
+    goto :fail
+)
+
+del "%DISKPART_SCRIPT%" >nul 2>&1
+del "%DISKPART_OUTPUT%" >nul 2>&1
+
+echo.
+echo Checking the mounted partition...
+
+if not exist "%DRIVE%\EFI\BOOT\BOOTX64.EFI" (
+    echo ERROR: BOOTX64.EFI was not found:
+    echo %DRIVE%\EFI\BOOT\BOOTX64.EFI
+    goto :fail
+)
+
+if not exist "%DRIVE%\kernel.exe" (
+    echo ERROR: kernel.exe was not found:
+    echo %DRIVE%\kernel.exe
+    goto :fail
+)
+
+echo.
 echo [2/4] Copying updated boot files...
 
-copy /Y "%BOOTLOADER%" "M:\EFI\BOOT\BOOTX64.EFI"
+copy /Y "%BOOTLOADER%" "%DRIVE%\EFI\BOOT\BOOTX64.EFI"
 
 if errorlevel 1 (
     echo ERROR: Failed to copy the UEFI bootloader.
     goto :fail
 )
 
-copy /Y "%KERNEL%" "M:\kernel.exe"
+copy /Y "%KERNEL%" "%DRIVE%\kernel.exe"
 
 if errorlevel 1 (
     echo ERROR: Failed to copy the kernel.
@@ -130,12 +177,13 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/4] Detaching source VHD...
+echo [3/4] Restoring the EFI partition and detaching the VHD...
 
-call :detach_vhd
+call :restore_and_detach
 
 if errorlevel 1 (
-    echo ERROR: Could not confirm VHD detachment.
+    echo ERROR: Partition restoration or VHD detachment failed.
+    echo Do not convert the VHD until its partition is restored.
     goto :fail
 )
 
@@ -156,13 +204,6 @@ if not exist "%TEMP_VMDK%" (
 
 echo.
 echo Installing the new VMDK...
-
-if exist "%BACKUP_VMDK%" (
-    echo ERROR: Backup file already exists:
-    echo %BACKUP_VMDK%
-    echo Check it before proceeding.
-    goto :fail
-)
 
 if exist "%VMDK_PATH%" (
     move "%VMDK_PATH%" "%BACKUP_VMDK%" >nul
@@ -196,62 +237,101 @@ echo.
 echo New VMware disk:
 echo %VMDK_PATH%
 echo.
-echo Previous disk backup, if one existed:
-echo %BACKUP_VMDK%
+
+if exist "%BACKUP_VMDK%" (
+    echo Previous disk backup:
+    echo %BACKUP_VMDK%
+)
+
 echo.
+echo The original EFI partition type and attributes
+echo have been restored, and the source VHD is detached.
 echo Attach the updated VMDK to your JollyOS VM.
 goto :success
 
+:restore_and_detach
 
-:detach_vhd
-if not "%DISKPART_SCRIPT%"=="" del "%DISKPART_SCRIPT%" >nul 2>&1
+if "!DISK_ATTACHED!"=="1" (
+    echo Restoring the original EFI partition type...
 
-(
-    echo select vdisk file="%VHD_PATH%"
-    echo detach vdisk
-    echo exit
-) > "%TEMP%\JollyOS-detach.txt"
+    (
+        echo select vdisk file="%VHD_PATH%"
+        echo select partition 1
+        echo remove letter=%DRIVE:~0,1%
+        echo set id=%EFI_TYPE% override
+        echo gpt attributes=%EFI_ATTRIBUTES%
+        echo detail partition
+        echo detach vdisk
+        echo exit
+    ) > "%DISKPART_SCRIPT%"
 
-diskpart /s "%TEMP%\JollyOS-detach.txt"
-del "%TEMP%\JollyOS-detach.txt" >nul 2>&1
+    diskpart /s "%DISKPART_SCRIPT%" > "%DISKPART_OUTPUT%" 2>&1
+    type "%DISKPART_OUTPUT%"
 
-if exist "M:\." (
-    echo WARNING: Drive J: still appears to be accessible.
-    exit /b 1
+    findstr /I /C:"DiskPart successfully detached the virtual disk file." "%DISKPART_OUTPUT%" >nul
+
+    if errorlevel 1 (
+        echo ERROR: DiskPart did not confirm VHD detachment.
+        exit /b 1
+    )
+
+    findstr /I /C:"%EFI_TYPE%" "%DISKPART_OUTPUT%" >nul
+
+    if errorlevel 1 (
+        echo ERROR: The original EFI partition type was not confirmed.
+        exit /b 1
+    )
+
+    findstr /I /C:"0X8000000000000000" "%DISKPART_OUTPUT%" >nul
+
+    if errorlevel 1 (
+        echo ERROR: The original EFI partition attributes were not confirmed.
+        exit /b 1
+    )
+
+    set "DISK_ATTACHED=0"
+    set "PARTITION_MODIFIED=0"
 )
 
-set "DISK_ATTACHED=0"
+del "%DISKPART_SCRIPT%" >nul 2>&1
+del "%DISKPART_OUTPUT%" >nul 2>&1
+
 exit /b 0
 
+:success
+
+del "%DISKPART_SCRIPT%" >nul 2>&1
+del "%DISKPART_OUTPUT%" >nul 2>&1
+
+echo.
+pause
+exit /b 0
 
 :fail
+
 echo.
 echo ==========================================
-echo              UPDATE FAILED
+echo             UPDATE FAILED
 echo ==========================================
+echo.
 
-if "%DISK_ATTACHED%"=="1" (
-    echo.
-    echo Attempting to detach the source VHD...
-    call :detach_vhd
+if "!DISK_ATTACHED!"=="1" (
+    echo Attempting to restore the EFI partition and detach the VHD...
+    call :restore_and_detach
+
+    if errorlevel 1 (
+        echo.
+        echo WARNING: Automatic restoration or detachment failed.
+        echo Do not run the update again until the VHD is inspected.
+        echo Preserve the source VHD and all backup files.
+    )
 )
 
-if not "%DISKPART_SCRIPT%"=="" (
-    del "%DISKPART_SCRIPT%" >nul 2>&1
-)
+if defined DISKPART_SCRIPT del "%DISKPART_SCRIPT%" >nul 2>&1
+if defined DISKPART_OUTPUT del "%DISKPART_OUTPUT%" >nul 2>&1
 
 echo.
-echo Review the error above before running again.
-goto :finish
-
-
-:success
+echo Review the errors above before retrying.
 echo.
-goto :finish
-
-
-:finish
-echo Press any key to close this window...
-pause >nul
-exit /b
-
+pause
+exit /b 1

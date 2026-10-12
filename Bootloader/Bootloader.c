@@ -1,4 +1,3 @@
-
 #include <Uefi.h>
 
 #include <Library/UefiLib.h>
@@ -11,6 +10,8 @@
 #include <Protocol/GraphicsOutput.h>
 
 #include <Guid/FileInfo.h>
+
+#include <JollyOsBootInfo.h>
 
 #define KERNEL_LOAD_ADDRESS 0x100000ULL
 #define PE_SIGNATURE 0x00004550U
@@ -31,7 +32,7 @@ typedef struct
     UINT32 PixelFormat;
 } JOLLY_KERNEL_ARGUMENTS;
 
-typedef VOID(*JOLLY_KERNEL_ENTRY)(UINT64 Framebuffer, UINT32 Width, UINT32 Height, UINT32 PixelsPerScanLine, UINT32 PixelFormat);
+typedef VOID(*JOLLY_KERNEL_ENTRY)(const JOLLYOS_BOOT_INFO* BootInfo);
 
 static EFI_STATUS ReadKernelFile(EFI_FILE_PROTOCOL* Root, VOID** FileBuffer, UINTN* FileSize)
 {
@@ -271,7 +272,7 @@ static EFI_STATUS LoadKernelImage(const VOID* FileBuffer, UINTN FileSize, EFI_PH
     }
 
     *ImageBase = RequestedBase;
-    *ImageSize = Pages * EFI_PAGE_SIZE;
+    *ImageSize = SizeOfImage;
     *EntryPointRva = EntryRva;
 
     return EFI_SUCCESS;
@@ -307,21 +308,26 @@ static EFI_STATUS GetGraphicsInfo(EFI_GRAPHICS_OUTPUT_PROTOCOL** Graphics, UINT3
     return EFI_SUCCESS;
 }
 
-static EFI_STATUS ExitBootServicesAndGetMap(EFI_HANDLE ImageHandle, EFI_MEMORY_DESCRIPTOR** MemoryMap, UINTN* MemoryMapSize, UINTN* DescriptorSize, UINTN* MapKey)
+
+
+static EFI_STATUS ExitBootServicesAndGetMap(EFI_HANDLE ImageHandle, EFI_MEMORY_DESCRIPTOR** MemoryMap, UINTN* MemoryMapSize, UINTN* DescriptorSize, UINT32* DescriptorVersion, UINTN* MapKey)
 {
     EFI_STATUS Status;
     UINTN RequiredSize;
     UINTN Capacity;
     EFI_MEMORY_DESCRIPTOR* Buffer;
+    UINTN ExtraCapacity;
+    UINTN RetryCount;
 
     Buffer = NULL;
     Capacity = 0;
+    RetryCount = 0;
 
     for (;;)
     {
         RequiredSize = Capacity;
 
-        Status = gBS->GetMemoryMap(&RequiredSize, Buffer, MapKey, DescriptorSize, NULL);
+        Status = gBS->GetMemoryMap(&RequiredSize, Buffer, MapKey, DescriptorSize, DescriptorVersion);
 
         if (Status == EFI_BUFFER_TOO_SMALL)
         {
@@ -331,7 +337,14 @@ static EFI_STATUS ExitBootServicesAndGetMap(EFI_HANDLE ImageHandle, EFI_MEMORY_D
                 Buffer = NULL;
             }
 
-            Capacity = RequiredSize + 2 * (*DescriptorSize == 0 ? 1 : *DescriptorSize);
+            ExtraCapacity = 2 * (*DescriptorSize == 0 ? sizeof(EFI_MEMORY_DESCRIPTOR) : *DescriptorSize);
+
+            if (RequiredSize > MAX_UINTN - ExtraCapacity)
+            {
+                return EFI_OUT_OF_RESOURCES;
+            }
+
+            Capacity = RequiredSize + ExtraCapacity;
 
             Status = gBS->AllocatePool(EfiLoaderData, Capacity, (VOID**)&Buffer);
 
@@ -359,18 +372,28 @@ static EFI_STATUS ExitBootServicesAndGetMap(EFI_HANDLE ImageHandle, EFI_MEMORY_D
         {
             *MemoryMap = Buffer;
             *MemoryMapSize = RequiredSize;
+
             return EFI_SUCCESS;
         }
 
-        /*
-         * ExitBootServices may fail if the memory-map key changed.
-         * Retry using the same allocated buffer.
-         */
+        if (Status != EFI_INVALID_PARAMETER)
+        {
+            return Status;
+        }
+
+        RetryCount++;
+
+        if (RetryCount >= 5)
+        {
+            return EFI_ABORTED;
+        }
     }
 }
 
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable)
 {
+    UINT32 DescriptorVersion;
+    JOLLYOS_BOOT_INFO* BootInfo;
     EFI_STATUS Status;
     EFI_LOADED_IMAGE_PROTOCOL* LoadedImageProtocol;
     EFI_SIMPLE_FILE_SYSTEM_PROTOCOL* FileSystem;
@@ -385,6 +408,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     UINT32 Width;
     UINT32 Height;
     UINT32 PixelsPerScanLine;
+    EFI_PHYSICAL_ADDRESS FramebufferBase;
     EFI_MEMORY_DESCRIPTOR* MemoryMap;
     UINTN MemoryMapSize;
     UINTN DescriptorSize;
@@ -459,25 +483,73 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     Width = Graphics->Mode->Info->HorizontalResolution;
     Height = Graphics->Mode->Info->VerticalResolution;
     PixelsPerScanLine = Graphics->Mode->Info->PixelsPerScanLine;
+    FramebufferBase = Graphics->Mode->FrameBufferBase;
 
     Print(L"JollyOS: Framebuffer %ux%u.\r\n", Width, Height);
+
     Print(L"JollyOS: Exiting UEFI boot services...\r\n");
 
-    KernelEntry = (JOLLY_KERNEL_ENTRY)(UINTN)(KernelBase + EntryPointRva);
+    /*
+     * Allocate and populate the boot-information structure before
+     * ExitBootServices. It remains allocated for the kernel to use.
+     */
+    BootInfo = NULL;
 
-    Status = ExitBootServicesAndGetMap(ImageHandle, &MemoryMap, &MemoryMapSize, &DescriptorSize, &MapKey);
+    Status = gBS->AllocatePool(EfiLoaderData, sizeof(JOLLYOS_BOOT_INFO), (VOID**)&BootInfo);
 
     if (EFI_ERROR(Status))
     {
-        Print(L"JollyOS: ExitBootServices failed: %r\r\n", Status);
+        Print(L"JollyOS: Cannot allocate boot information: %r\r\n", Status);
+        return Status;
+    }
+
+    ZeroMem(BootInfo, sizeof(JOLLYOS_BOOT_INFO));
+
+    BootInfo->Version = JOLLYOS_BOOT_INFO_VERSION;
+    BootInfo->Size = (UINT32)sizeof(JOLLYOS_BOOT_INFO);
+
+    BootInfo->Framebuffer = (UINT64)FramebufferBase;
+    BootInfo->Width = Width;
+    BootInfo->Height = Height;
+    BootInfo->PixelsPerScanLine = PixelsPerScanLine;
+    BootInfo->PixelFormat = PixelFormat;
+
+    BootInfo->KernelBase = (UINT64)KernelBase;
+    BootInfo->KernelSize = (UINT64)KernelSize;
+
+    MemoryMap = NULL;
+    MemoryMapSize = 0;
+    DescriptorSize = 0;
+    DescriptorVersion = 0;
+    MapKey = 0;
+
+    KernelEntry = (JOLLY_KERNEL_ENTRY)(UINTN)(KernelBase + EntryPointRva);
+
+    Status = ExitBootServicesAndGetMap(ImageHandle, &MemoryMap, &MemoryMapSize, &DescriptorSize, &DescriptorVersion, &MapKey);
+
+    if (EFI_ERROR(Status))
+    {
+        /*
+         * Do not use the framebuffer or make further boot-service
+         * calls here. The firmware may have partially shut down
+         * boot services after an unsuccessful exit attempt.
+         */
         return Status;
     }
 
     /*
-     * No UEFI boot-service calls are permitted after this point.
-     * The kernel takes control and does not return.
+     * These are ordinary memory writes. No UEFI boot services are
+     * called after ExitBootServices succeeds.
      */
-    KernelEntry((UINT64)(UINTN)Graphics->Mode->FrameBufferBase, Width, Height, PixelsPerScanLine, PixelFormat);
+    BootInfo->MemoryMap = (UINT64)(UINTN)MemoryMap;
+    BootInfo->MemoryMapSize = (UINT64)MemoryMapSize;
+    BootInfo->MemoryMapDescriptorSize = (UINT64)DescriptorSize;
+    BootInfo->MemoryMapDescriptorVersion = DescriptorVersion;
+
+    /*
+     * Transfer control to the kernel. The kernel must not return.
+     */
+    KernelEntry(BootInfo);
 
     CpuDeadLoop();
 

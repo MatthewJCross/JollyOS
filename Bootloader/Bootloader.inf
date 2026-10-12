@@ -12,6 +12,7 @@
 
 [Packages]
   MdePkg/MdePkg.dec
+  JollyOS.dec
 
 [LibraryClasses]
   UefiApplicationEntryPoint

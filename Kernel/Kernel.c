@@ -2,6 +2,9 @@
 #include <stddef.h>
 #include <intrin.h>
 
+#include "JollyOsBootInfo.h"
+#include "serial.h"
+
 static volatile uint8_t *g_framebuffer;
 static uint32_t g_width;
 static uint32_t g_height;
@@ -157,29 +160,87 @@ static void DrawText(uint32_t x, uint32_t y, const char *text, uint32_t scale, u
 *
 * The bootloader passes these values from the UEFI Graphics Output Protocol.
   */
-void kernel_main(uint64_t framebuffer, uint32_t width, uint32_t height, uint32_t pixelsPerScanLine, uint32_t pixelFormat)
-{
-	g_framebuffer = (volatile uint8_t *)(uintptr_t)framebuffer;
-	g_width = width;
-	g_height = height;
-	g_pixelsPerScanLine = pixelsPerScanLine;
-	g_pixelFormat = pixelFormat;
 
-	if (g_framebuffer == 0 || g_width == 0 || g_height == 0)
+
+void kernel_main(const JOLLYOS_BOOT_INFO* bootInfo)
+{
+	serial_initialize();
+	serial_write_string("\nJollyOS: Kernel entry reached.\n");
+
+	if (bootInfo == NULL)
 	{
+		serial_write_string("ERROR: Boot information pointer is null.\n");
 		for (;;)
 		{
 			__halt();
 		}
 	}
 
+	serial_write_string("JollyOS: Boot information pointer is valid.\n");
+
+	if (bootInfo->Version != JOLLYOS_BOOT_INFO_VERSION)
+	{
+		serial_write_string("ERROR: Unsupported boot information version.\n");
+		for (;;)
+		{
+			__halt();
+		}
+	}
+
+	if (bootInfo->Size < sizeof(JOLLYOS_BOOT_INFO))
+	{
+		serial_write_string("ERROR: Boot information structure is too small.\n");
+		for (;;)
+		{
+			__halt();
+		}
+	}
+
+	serial_write_string("JollyOS: Boot information version and size validated.\n");
+
+	if (bootInfo->Framebuffer == 0 || bootInfo->Width == 0 || bootInfo->Height == 0 || bootInfo->PixelsPerScanLine < bootInfo->Width ||	(bootInfo->PixelFormat != 0 && bootInfo->PixelFormat != 1))
+	{
+		serial_write_string("ERROR: Invalid framebuffer information.\n");
+		for (;;)
+		{
+			__halt();
+		}
+	}
+
+	if (bootInfo->MemoryMap == 0 ||	bootInfo->MemoryMapSize == 0 ||	bootInfo->MemoryMapDescriptorSize < 40 || bootInfo->MemoryMapDescriptorSize > bootInfo->MemoryMapSize || bootInfo->MemoryMapSize % bootInfo->MemoryMapDescriptorSize != 0)
+	{
+		serial_write_string("ERROR: Invalid UEFI memory map information.\n");
+		for (;;)
+		{
+			__halt();
+		}
+	}
+
+	if (bootInfo->KernelBase == 0 || bootInfo->KernelSize == 0)
+	{
+		serial_write_string("ERROR: Invalid kernel image information.\n");
+		for (;;)
+		{
+			__halt();
+		}
+	}
+
+	serial_write_string("JollyOS: All boot information validated.\n");
+	serial_write_string("JollyOS: Initialising framebuffer.\n");
+
+	g_framebuffer = (volatile uint8_t*)(uintptr_t)bootInfo->Framebuffer;
+	g_width = bootInfo->Width;
+	g_height = bootInfo->Height;
+	g_pixelsPerScanLine = bootInfo->PixelsPerScanLine;
+	g_pixelFormat = bootInfo->PixelFormat;
+
 	FillRectangle(0, 0, g_width, g_height, 8, 12, 20);
-
 	FillRectangle(0, 0, g_width, 12, 30, 110, 220);
-
 	DrawText(40, 50, "WELCOME TO JOLLYOS!", 4, 255, 255, 255);
-
 	DrawText(40, 100, "BOOTED FROM OUR OWN UEFI LOADER.", 2, 220, 230, 245);
+
+	serial_write_string("JollyOS: Welcome screen drawn successfully.\n");
+	serial_write_string("JollyOS: Boot initialisation complete.\n");
 
 	for (;;)
 	{
