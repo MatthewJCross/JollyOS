@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<Foundry>
+<VM>
+<VMId type="string">52 90 70 c3 1e 5e 63 66-e4 03 36 a6 fc 14 4d 2f</VMId>
+<ClientMetaData>
+<clientMetaDataAttributes/>
+<HistoryEventList/></ClientMetaData>
+<vmxPathName type="string">JollyOS.vmx</vmxPathName></VM></Foundry>
