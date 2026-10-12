@@ -1,0 +1,9 @@
+# VMware virtual disks
+
+*.vhd  filter=lfs diff=lfs merge=lfs -text
+*.vmdk filter=lfs diff=lfs merge=lfs -text
+
+# Disk and optical images
+
+*.img  filter=lfs diff=lfs merge=lfs -text
+*.iso  filter=lfs diff=lfs merge=lfs -text
