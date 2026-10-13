@@ -1,14 +1,5 @@
-
 @echo off
-setlocal
-
-call "C:\Program Files\Microsoft Visual Studio\18\Professional\VC\Auxiliary\Build\vcvars64.bat"
-
-if errorlevel 1 (
-    echo ERROR: Could not initialise the Visual Studio build environment.
-    pause
-    exit /b 1
-)
+setlocal EnableExtensions
 
 echo ========================================
 echo       JollyOS Kernel Build
@@ -23,6 +14,38 @@ set "INCLUDE_DIR=%PROJECT_DIR%\Include"
 set "BUILD_DIR=%PROJECT_DIR%\build"
 set "SERIAL_SOURCE=%KERNEL_DIR%\serial.c"
 set "SERIAL_OBJECT=%BUILD_DIR%\serial.obj"
+set "VIRTUAL_MEMORY_SOURCE=%KERNEL_DIR%\VirtualMemory.c"
+set "VIRTUAL_MEMORY_OBJECT=%BUILD_DIR%\VirtualMemory.obj"
+
+where cl.exe >nul 2>&1
+
+if errorlevel 1 call :InitialiseVisualStudio
+
+if errorlevel 1 exit /b 1
+
+goto :VisualStudioReady
+
+:InitialiseVisualStudio
+echo Initialising Visual Studio 2026 x64...
+call "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+
+if errorlevel 1 (
+    echo ERROR: Could not initialise the Visual Studio build environment.
+    exit /b 1
+)
+
+where cl.exe >nul 2>&1
+
+if errorlevel 1 (
+    echo ERROR: MSVC compiler cl.exe was not found.
+    exit /b 1
+)
+
+exit /b 0
+
+:VisualStudioReady
+
+echo.
 
 if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
 
@@ -49,27 +72,33 @@ if not exist "%SERIAL_SOURCE%" (
     exit /b 1
 )
 
-where cl.exe >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: MSVC compiler cl.exe was not found.
-    echo Run this script from the Visual Studio 2026 x64 Developer Command Prompt.
+if not exist "%INCLUDE_DIR%\VirtualMemory.h" (
+    echo ERROR: VirtualMemory.h was not found.
+    echo Expected: %INCLUDE_DIR%\VirtualMemory.h
+    exit /b 1
+)
+
+if not exist "%VIRTUAL_MEMORY_SOURCE%" (
+    echo ERROR: VirtualMemory.c was not found.
+    echo Expected: %VIRTUAL_MEMORY_SOURCE%
     exit /b 1
 )
 
 where ml64.exe >nul 2>&1
+
 if errorlevel 1 (
     echo ERROR: MASM assembler ml64.exe was not found.
-    echo Run this script from the Visual Studio 2026 x64 Developer Command Prompt.
     exit /b 1
 )
 
 where link.exe >nul 2>&1
+
 if errorlevel 1 (
     echo ERROR: Microsoft linker link.exe was not found.
     exit /b 1
 )
 
-echo [1/4] Assembling entry.asm...
+echo [1/5] Assembling entry.asm...
 
 ml64.exe /nologo ^
     /c ^
@@ -82,7 +111,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/4] Compiling kernel.c...
+echo [2/5] Compiling kernel.c...
 
 cl.exe /nologo ^
     /c ^
@@ -104,7 +133,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/4] Compiling serial.c...
+echo [3/5] Compiling serial.c...
 
 cl.exe /nologo ^
     /c ^
@@ -126,8 +155,43 @@ if errorlevel 1 (
 )
 
 echo.
-echo [4/4] Linking kernel intermediate image...
+echo [4/5] Compiling VirtualMemory.c...
 
+cl.exe /nologo ^
+    /c ^
+    /TC ^
+    /O2 ^
+    /W4 ^
+    /GS- ^
+    /GR- ^
+    /Zl ^
+    /Oi ^
+    /I"%INCLUDE_DIR%" ^
+    /D_CRT_SECURE_NO_WARNINGS ^
+    /Fo"%VIRTUAL_MEMORY_OBJECT%" ^
+    "%VIRTUAL_MEMORY_SOURCE%"
+
+if errorlevel 1 (
+    echo ERROR: Virtual memory compilation failed.
+    exit /b 1
+)
+
+echo.
+echo [5/5] Linking kernel intermediate image...
+
+echo.
+echo DEBUG: Linker inputs
+echo Entry:       "%BUILD_DIR%\entry.obj"
+echo Kernel:      "%BUILD_DIR%\kernel.obj"
+echo Serial:      "%SERIAL_OBJECT%"
+echo VirtualMemory: "%VIRTUAL_MEMORY_OBJECT%"
+echo.
+echo.
+echo DEBUG: Linker executable
+where link.exe
+echo.
+
+@echo on
 link.exe /nologo ^
     /OUT:"%BUILD_DIR%\kernel.exe" ^
     /ENTRY:_start ^
@@ -142,7 +206,8 @@ link.exe /nologo ^
     /OPT:ICF ^
     "%BUILD_DIR%\entry.obj" ^
     "%BUILD_DIR%\kernel.obj" ^
-    "%SERIAL_OBJECT%"
+    "%SERIAL_OBJECT%" ^
+    "%VIRTUAL_MEMORY_OBJECT%"
 
 if errorlevel 1 (
     echo ERROR: Linking failed.
@@ -160,5 +225,4 @@ echo The current UEFI loader loads this PE image
 echo directly; it is not a flat KERNEL.BIN.
 echo.
 
-pause
 exit /b 0

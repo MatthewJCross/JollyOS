@@ -1,4 +1,4 @@
-
+cls
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
@@ -14,27 +14,25 @@ set "VS_ENV=!VS_ROOT!\VC\Auxiliary\Build\vcvars64.bat"
 set "NASM_PREFIX=C:\Program Files\NASM/"
 set "BOOTLOADER_OUTPUT=!EDK2_DIR!\Build\JollyOS\DEBUG_VS2026\X64\Bootloader\Bootloader\OUTPUT\Bootloader.efi"
 set "BOOTLOADER_DEST=!PROJECT_DIR!\build\EFI\BOOT\BOOTX64.EFI"
+set "KERNEL_OUTPUT=!PROJECT_DIR!\build\kernel.exe"
 
 if not exist "!PROJECT_DIR!\JollyOS.dsc" (
     echo ERROR: JollyOS.dsc was not found.
-    echo Expected: !PROJECT_DIR!\JollyOS.dsc
     goto :fail
 )
 
 if not exist "!EDK2_DIR!\edksetup.bat" (
-    echo ERROR: EDK II was not found at !EDK2_DIR!.
+    echo ERROR: EDK II was not found.
     goto :fail
 )
 
 if not exist "!VS_ENV!" (
     echo ERROR: Visual Studio environment script was not found.
-    echo Expected: !VS_ENV!
     goto :fail
 )
 
 if not exist "!NASM_PREFIX!\nasm.exe" (
     echo ERROR: NASM was not found.
-    echo Expected: !NASM_PREFIX!\nasm.exe
     goto :fail
 )
 
@@ -44,32 +42,19 @@ echo.
 call "!VS_ENV!"
 
 if errorlevel 1 (
-    echo ERROR: Visual Studio environment initialisation failed.
+    echo ERROR: Visual Studio initialisation failed.
     goto :fail
 )
 
-where cl >nul 2>&1
+where cl.exe >nul 2>&1
 
 if errorlevel 1 (
-    echo ERROR: MSVC compiler was not found after initialisation.
+    echo ERROR: MSVC compiler was not found.
     goto :fail
 )
-
-if not defined VCToolsInstallDir (
-    echo ERROR: VCToolsInstallDir was not set by Visual Studio.
-    goto :fail
-)
-
-set "VS2026_PREFIX=%VCToolsInstallDir%"
-set "PYTHON_COMMAND=py -3.13"
-set "PACKAGES_PATH=!PROJECT_DIR!;!EDK2_DIR!"
 
 echo MSVC compiler:
-where cl
-
-echo.
-echo MSVC installation:
-echo !VS2026_PREFIX!
+where cl.exe
 
 echo.
 echo [2/5] Initialising EDK II...
@@ -82,16 +67,14 @@ if errorlevel 1 (
     goto :fail
 )
 
+set "PYTHON_COMMAND=py -3.13"
+set "PACKAGES_PATH=!PROJECT_DIR!;!EDK2_DIR!"
+
 call "!EDK2_DIR!\edksetup.bat" VS2026
 
 if errorlevel 1 (
     echo ERROR: EDK II environment initialisation failed.
     goto :fail
-)
-
-if not exist "!EDK2_DIR!\BaseTools\Bin\Win32" (
-    echo WARNING: EDK II BaseTools\Bin\Win32 is missing.
-    echo The EDK II build may fail until BaseTools is built.
 )
 
 where build >nul 2>&1
@@ -105,7 +88,7 @@ echo.
 echo [3/5] Building UEFI bootloader...
 echo.
 
-build -p "!PROJECT_DIR!\JollyOS.dsc" -a X64 -t VS2026 -b DEBUG
+call build -p "!PROJECT_DIR!\JollyOS.dsc" -a X64 -t VS2026 -b DEBUG
 
 if errorlevel 1 (
     echo ERROR: UEFI bootloader build failed.
@@ -113,7 +96,7 @@ if errorlevel 1 (
 )
 
 if not exist "!BOOTLOADER_OUTPUT!" (
-    echo ERROR: Built Bootloader.efi was not found.
+    echo ERROR: Bootloader.efi was not found.
     echo Expected: !BOOTLOADER_OUTPUT!
     goto :fail
 )
@@ -129,8 +112,9 @@ if errorlevel 1 (
     goto :fail
 )
 
-if not exist "!PROJECT_DIR!\build\kernel.exe" (
+if not exist "!KERNEL_OUTPUT!" (
     echo ERROR: kernel.exe was not created.
+    echo Expected: !KERNEL_OUTPUT!
     goto :fail
 )
 
@@ -154,6 +138,11 @@ if errorlevel 1 (
     goto :fail
 )
 
+if not exist "!BOOTLOADER_DEST!" (
+    echo ERROR: Bootloader copy could not be verified.
+    goto :fail
+)
+
 echo.
 echo ==========================================
 echo          JollyOS BUILD SUCCEEDED
@@ -163,10 +152,11 @@ echo Bootloader:
 echo !BOOTLOADER_DEST!
 echo.
 echo Kernel:
-echo !PROJECT_DIR!\build\kernel.exe
+echo !KERNEL_OUTPUT!
 echo.
 echo NOTE: The VMware VHD/VMDK has NOT been updated.
 echo.
+
 pause
 exit /b 0
 
@@ -176,7 +166,7 @@ echo ==========================================
 echo             BUILD FAILED
 echo ==========================================
 echo.
-echo Read the error messages above to identify the failed step.
+echo Read the error messages above.
 echo.
 pause
 exit /b 1
