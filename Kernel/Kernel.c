@@ -6,6 +6,7 @@
 #include "PhysicalMemory.h"
 #include "serial.h"
 #include "VirtualMemory.h"
+#include "KernelHeap.h"
 
 static volatile uint8_t *g_framebuffer;
 static uint32_t g_width;
@@ -921,6 +922,26 @@ void kernel_main(const JOLLYOS_BOOT_INFO* bootInfo)
     if (!VirtualMemorySelfTest())
     {
         serial_write_string("FATAL: Virtual memory self-test failed.\n");
+
+        for (;;)
+        {
+            __halt();
+        }
+    }
+    
+    if (!KernelHeapInitialize())
+    {
+        serial_write_string("FATAL: Kernel heap initialisation failed.\n");
+
+        for (;;)
+        {
+            __halt();
+        }
+    }
+
+    if (!KernelHeapSelfTest())
+    {
+        serial_write_string("FATAL: Kernel heap self-test failed.\n");
 
         for (;;)
         {

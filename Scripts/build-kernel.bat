@@ -16,6 +16,8 @@ set "SERIAL_SOURCE=%KERNEL_DIR%\serial.c"
 set "SERIAL_OBJECT=%BUILD_DIR%\serial.obj"
 set "VIRTUAL_MEMORY_SOURCE=%KERNEL_DIR%\VirtualMemory.c"
 set "VIRTUAL_MEMORY_OBJECT=%BUILD_DIR%\VirtualMemory.obj"
+set "KERNEL_HEAP_SOURCE=%KERNEL_DIR%\KernelHeap.c"
+set "KERNEL_HEAP_OBJECT=%BUILD_DIR%\KernelHeap.obj"
 
 where cl.exe >nul 2>&1
 
@@ -84,6 +86,18 @@ if not exist "%VIRTUAL_MEMORY_SOURCE%" (
     exit /b 1
 )
 
+if not exist "%INCLUDE_DIR%\KernelHeap.h" (
+    echo ERROR: KernelHeap.h was not found.
+    echo Expected: %INCLUDE_DIR%\KernelHeap.h
+    exit /b 1
+)
+
+if not exist "%KERNEL_HEAP_SOURCE%" (
+    echo ERROR: KernelHeap.c was not found.
+    echo Expected: %KERNEL_HEAP_SOURCE%
+    exit /b 1
+)
+
 where ml64.exe >nul 2>&1
 
 if errorlevel 1 (
@@ -98,7 +112,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [1/5] Assembling entry.asm...
+echo [1/6] Assembling entry.asm...
 
 ml64.exe /nologo ^
     /c ^
@@ -111,7 +125,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/5] Compiling kernel.c...
+echo [2/6] Compiling kernel.c...
 
 cl.exe /nologo ^
     /c ^
@@ -133,7 +147,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/5] Compiling serial.c...
+echo [3/6] Compiling serial.c...
 
 cl.exe /nologo ^
     /c ^
@@ -155,7 +169,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [4/5] Compiling VirtualMemory.c...
+echo [4/6] Compiling VirtualMemory.c...
 
 cl.exe /nologo ^
     /c ^
@@ -177,7 +191,29 @@ if errorlevel 1 (
 )
 
 echo.
-echo [5/5] Linking kernel intermediate image...
+echo [5/6] Compiling KernelHeap.c...
+
+cl.exe /nologo ^
+    /c ^
+    /TC ^
+    /O2 ^
+    /W4 ^
+    /GS- ^
+    /GR- ^
+    /Zl ^
+    /Oi ^
+    /I"%INCLUDE_DIR%" ^
+    /D_CRT_SECURE_NO_WARNINGS ^
+    /Fo"%KERNEL_HEAP_OBJECT%" ^
+    "%KERNEL_HEAP_SOURCE%"
+
+if errorlevel 1 (
+    echo ERROR: Kernel heap compilation failed.
+    exit /b 1
+)
+
+echo.
+echo [6/6] Linking kernel intermediate image...
 
 echo.
 echo DEBUG: Linker inputs
@@ -207,7 +243,8 @@ link.exe /nologo ^
     "%BUILD_DIR%\entry.obj" ^
     "%BUILD_DIR%\kernel.obj" ^
     "%SERIAL_OBJECT%" ^
-    "%VIRTUAL_MEMORY_OBJECT%"
+    "%VIRTUAL_MEMORY_OBJECT%" ^
+    "%KERNEL_HEAP_OBJECT%"
 
 if errorlevel 1 (
     echo ERROR: Linking failed.
