@@ -34,6 +34,11 @@ typedef struct
 
 typedef VOID(*JOLLY_KERNEL_ENTRY)(const JOLLYOS_BOOT_INFO* BootInfo);
 
+#include <Uefi.h>
+#include <Library/UefiBootServicesTableLib.h>
+#include <Library/MemoryAllocationLib.h>
+#include <Protocol/GraphicsOutput.h>
+
 static EFI_STATUS ReadKernelFile(EFI_FILE_PROTOCOL* Root, VOID** FileBuffer, UINTN* FileSize)
 {
     EFI_STATUS Status;
@@ -390,6 +395,39 @@ static EFI_STATUS ExitBootServicesAndGetMap(EFI_HANDLE ImageHandle, EFI_MEMORY_D
     }
 }
 
+EFI_STATUS SetPreferredGraphicsMode(EFI_GRAPHICS_OUTPUT_PROTOCOL *Graphics, UINT32 Width, UINT32 Height)
+{
+    if (Graphics == NULL || Graphics->Mode == NULL)
+    {
+        return EFI_INVALID_PARAMETER;
+    }
+
+    for (UINT32 ModeNumber = 0; ModeNumber < Graphics->Mode->MaxMode; ModeNumber++)
+    {
+        EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *ModeInfo = NULL;
+        UINTN ModeInfoSize = 0;
+
+        EFI_STATUS Status = Graphics->QueryMode(Graphics, ModeNumber, &ModeInfoSize, &ModeInfo);
+
+        if (EFI_ERROR(Status))
+        {
+            continue;
+        }
+
+        BOOLEAN Match = ModeInfo->HorizontalResolution == Width &&
+                        ModeInfo->VerticalResolution == Height;
+
+        FreePool(ModeInfo);
+
+        if (Match)
+        {
+            return Graphics->SetMode(Graphics, ModeNumber);
+        }
+    }
+
+    return EFI_UNSUPPORTED;
+}
+
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable)
 {
     UINT32 DescriptorVersion;
@@ -480,13 +518,30 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
         return Status;
     }
 
-    Width = Graphics->Mode->Info->HorizontalResolution;
-    Height = Graphics->Mode->Info->VerticalResolution;
-    PixelsPerScanLine = Graphics->Mode->Info->PixelsPerScanLine;
-    FramebufferBase = Graphics->Mode->FrameBufferBase;
+	Status = gBS->LocateProtocol(&gEfiGraphicsOutputProtocolGuid,  NULL,	(VOID **)&Graphics);
+	if (EFI_ERROR(Status) || Graphics == NULL || Graphics->Mode == NULL || Graphics->Mode->Info == NULL)
+	{
+	    Print(L"ERROR: Unable to locate UEFI Graphics Output Protocol.\r\n");
+	    return EFI_UNSUPPORTED;
+	}
 
-    Print(L"JollyOS: Framebuffer %ux%u.\r\n", Width, Height);
+	EFI_STATUS GraphicsStatus = SetPreferredGraphicsMode(Graphics, 1280, 1024);
 
+	if (EFI_ERROR(GraphicsStatus))
+	{
+	    Print(L"1280 x 1024 unavailable; retaining current graphics mode.\r\n");
+	}
+	else
+	{
+	    Print(L"Graphics mode set to 1280 x 1024.\r\n");
+	}
+
+	Width = Graphics->Mode->Info->HorizontalResolution;
+	Height = Graphics->Mode->Info->VerticalResolution;
+	PixelsPerScanLine = Graphics->Mode->Info->PixelsPerScanLine;
+	FramebufferBase = Graphics->Mode->FrameBufferBase;
+
+	Print(L"Framebuffer: %u x %u\r\n", Width, Height);
     Print(L"JollyOS: Exiting UEFI boot services...\r\n");
 
     /*

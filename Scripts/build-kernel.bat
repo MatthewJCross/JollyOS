@@ -18,6 +18,10 @@ set "VIRTUAL_MEMORY_SOURCE=%KERNEL_DIR%\VirtualMemory.c"
 set "VIRTUAL_MEMORY_OBJECT=%BUILD_DIR%\VirtualMemory.obj"
 set "KERNEL_HEAP_SOURCE=%KERNEL_DIR%\KernelHeap.c"
 set "KERNEL_HEAP_OBJECT=%BUILD_DIR%\KernelHeap.obj"
+set "PORT_IO_SOURCE=%KERNEL_DIR%\PortIo.asm"
+set "PORT_IO_OBJECT=%BUILD_DIR%\PortIo.obj"
+set "KEYBOARD_SOURCE=%KERNEL_DIR%\Keyboard.c"
+set "KEYBOARD_OBJECT=%BUILD_DIR%\Keyboard.obj"
 
 where cl.exe >nul 2>&1
 
@@ -98,6 +102,31 @@ if not exist "%KERNEL_HEAP_SOURCE%" (
     exit /b 1
 )
 
+
+if not exist "%INCLUDE_DIR%\PortIo.h" (
+    echo ERROR: PortIo.h was not found.
+    echo Expected: %INCLUDE_DIR%\PortIo.h
+    exit /b 1
+)
+
+if not exist "%PORT_IO_SOURCE%" (
+    echo ERROR: PortIo.asm was not found.
+    echo Expected: %PORT_IO_SOURCE%
+    exit /b 1
+)
+
+if not exist "%INCLUDE_DIR%\Keyboard.h" (
+    echo ERROR: Keyboard.h was not found.
+    echo Expected: %INCLUDE_DIR%\Keyboard.h
+    exit /b 1
+)
+
+if not exist "%KEYBOARD_SOURCE%" (
+    echo ERROR: Keyboard.c was not found.
+    echo Expected: %KEYBOARD_SOURCE%
+    exit /b 1
+)
+
 where ml64.exe >nul 2>&1
 
 if errorlevel 1 (
@@ -112,7 +141,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [1/6] Assembling entry.asm...
+echo [1/8] Assembling entry.asm...
 
 ml64.exe /nologo ^
     /c ^
@@ -125,7 +154,19 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/6] Compiling kernel.c...
+echo [2/8] Assembling PortIo.asm...
+ml64.exe /nologo ^
+    /c ^
+    /Fo"%PORT_IO_OBJECT%" ^
+    "%PORT_IO_SOURCE%"
+
+if errorlevel 1 (
+    echo ERROR: Failed to assemble PortIo.asm.
+    exit /b 1
+)
+
+echo.
+echo [3/8] Compiling kernel.c...
 
 cl.exe /nologo ^
     /c ^
@@ -147,7 +188,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/6] Compiling serial.c...
+echo [4/8] Compiling serial.c...
 
 cl.exe /nologo ^
     /c ^
@@ -169,7 +210,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [4/6] Compiling VirtualMemory.c...
+echo [5/8] Compiling VirtualMemory.c...
 
 cl.exe /nologo ^
     /c ^
@@ -191,7 +232,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [5/6] Compiling KernelHeap.c...
+echo [6/8] Compiling KernelHeap.c...
 
 cl.exe /nologo ^
     /c ^
@@ -213,7 +254,29 @@ if errorlevel 1 (
 )
 
 echo.
-echo [6/6] Linking kernel intermediate image...
+echo [7/8] Compiling Keyboard.c...
+
+cl.exe /nologo ^
+    /c ^
+    /TC ^
+    /O2 ^
+    /W4 ^
+    /GS- ^
+    /GR- ^
+    /Zl ^
+    /Oi ^
+    /I"%INCLUDE_DIR%" ^
+    /D_CRT_SECURE_NO_WARNINGS ^
+    /Fo"%KEYBOARD_OBJECT%" ^
+    "%KEYBOARD_SOURCE%"
+
+if errorlevel 1 (
+    echo ERROR: Keyboard compilation failed.
+    exit /b 1
+)
+
+echo.
+echo [8/8] Linking kernel intermediate image...
 
 echo.
 echo DEBUG: Linker inputs
@@ -244,7 +307,9 @@ link.exe /nologo ^
     "%BUILD_DIR%\kernel.obj" ^
     "%SERIAL_OBJECT%" ^
     "%VIRTUAL_MEMORY_OBJECT%" ^
-    "%KERNEL_HEAP_OBJECT%"
+    "%BUILD_DIR%\KernelHeap.obj" ^
+    "%PORT_IO_OBJECT%" ^
+    "%KEYBOARD_OBJECT%"
 
 if errorlevel 1 (
     echo ERROR: Linking failed.

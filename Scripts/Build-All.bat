@@ -168,5 +168,4 @@ echo ==========================================
 echo.
 echo Read the error messages above.
 echo.
-pause
 exit /b 1

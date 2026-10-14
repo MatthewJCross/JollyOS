@@ -1,5 +1,4 @@
-#ifndef JOLLYOS_PHYSICAL_MEMORY_H
-#define JOLLYOS_PHYSICAL_MEMORY_H
+#pragma once
 
 #include <stdint.h>
 #include "JollyOsBootInfo.h"
@@ -29,8 +28,3 @@ int PhysicalPageFreeContiguous(uint64_t physicalAddress, uint64_t pageCount);
 
 /* Reads current page counts. Returns zero until the allocator is initialised. */
 int PhysicalMemoryGetStats(JOLLYOS_PHYSICAL_MEMORY_STATS* stats);
-
-/* Reads current page counts. Returns zero until the allocator is initialised. */
-int PhysicalMemoryGetStats(JOLLYOS_PHYSICAL_MEMORY_STATS* stats);
-
-#endif
